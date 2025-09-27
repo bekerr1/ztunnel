@@ -82,12 +82,13 @@ impl ConnSpawner {
 
         let cert = self.local_workload.fetch_certificate().await?;
         let connector = cert.outbound_connector(key.dst_id.clone())?;
-        let tcp_stream = super::freebind_connect(None, key.dst, self.socket_factory.as_ref())
-            .await
-            .map_err(|e: io::Error| match e.kind() {
-                io::ErrorKind::TimedOut => Error::MaybeHBONENetworkPolicyError(e),
-                _ => e.into(),
-            })?;
+        let tcp_stream =
+            super::freebind_connect(Some(key.src), key.dst, self.socket_factory.as_ref())
+                .await
+                .map_err(|e: io::Error| match e.kind() {
+                    io::ErrorKind::TimedOut => Error::MaybeHBONENetworkPolicyError(e),
+                    _ => e.into(),
+                })?;
 
         let tls_stream = connector.connect(tcp_stream).await?;
         trace!("connector connected, handshaking");
