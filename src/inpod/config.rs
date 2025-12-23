@@ -59,6 +59,53 @@ struct InPodSocketFactory {
     inner: DefaultSocketFactory,
     netns: InpodNetns,
     mark: Option<std::num::NonZeroU32>,
+    is_multi_nic: Option<bool>,
+}
+
+#[cfg(target_os = "linux")]
+fn detect_multi_nic(netns: &InpodNetns) -> std::io::Result<Option<bool>> {
+    use nix::ifaddrs::getifaddrs;
+    use std::collections::HashSet;
+
+    netns.run(|| {
+        // Query kernel for interface addresses via netlink
+        let ifaddrs = getifaddrs()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        let mut interfaces = Vec::new();
+        let mut seen = HashSet::new();
+        let mut has_other_interface = false;
+
+        // Iterate through all interface addresses
+        for ifaddr in ifaddrs {
+            let name = ifaddr.interface_name;
+
+            // Deduplicate: getifaddrs returns one entry per address
+            if seen.insert(name.clone()) {
+                interfaces.push(name.clone());
+
+                // Skip loopback and eth0
+                // TODO: are names this predicatble? Should they be hardcoded?
+                if name != "lo" && name != "eth0" {
+                    has_other_interface = true;
+                }
+            }
+        }
+
+        tracing::info!(
+            "multi-NIC detection (netlink): found interfaces: {:?}, has_multi_nic={}",
+            interfaces,
+            has_other_interface
+        );
+
+        Ok(Some(has_other_interface))
+    })?
+}
+
+#[cfg(not(target_os = "linux"))]
+fn detect_multi_nic(_netns: &InpodNetns) -> std::io::Result<Option<bool>> {
+    tracing::info!("multi-NIC detection not implemented on non-Linux platforms");
+    Ok(None)
 }
 
 impl InPodSocketFactory {
@@ -75,7 +122,16 @@ impl InPodSocketFactory {
         netns: InpodNetns,
         mark: Option<std::num::NonZeroU32>,
     ) -> Self {
-        Self { inner, netns, mark }
+        let is_multi_nic = detect_multi_nic(&netns).unwrap_or_else(|e| {
+            tracing::info!("multi-NIC detection failed: {}, defaulting to single-NIC mode", e);
+            Some(false)
+        });
+        Self {
+            inner,
+            netns,
+            mark,
+            is_multi_nic,
+        }
     }
 
     fn run_in_ns<S, F: FnOnce() -> std::io::Result<S>>(&self, f: F) -> std::io::Result<S> {
@@ -118,6 +174,10 @@ impl crate::proxy::SocketFactory for InPodSocketFactory {
 
     fn ipv6_enabled_localhost(&self) -> std::io::Result<bool> {
         self.run_in_ns(|| self.inner.ipv6_enabled_localhost())
+    }
+
+    fn is_multi_nic(&self) -> Option<bool> {
+        self.is_multi_nic
     }
 }
 
@@ -191,6 +251,10 @@ impl crate::proxy::SocketFactory for InPodSocketPortReuseFactory {
 
     fn ipv6_enabled_localhost(&self) -> std::io::Result<bool> {
         self.sf.ipv6_enabled_localhost()
+    }
+
+    fn is_multi_nic(&self) -> Option<bool> {
+        self.sf.is_multi_nic()
     }
 }
 

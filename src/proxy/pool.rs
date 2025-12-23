@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use tokio::sync::watch;
 
 use tokio::sync::Mutex;
-use tracing::{Instrument, debug, trace};
+use tracing::{Instrument, debug, info, trace};
 
 use crate::config;
 
@@ -82,7 +82,21 @@ impl ConnSpawner {
 
         let cert = self.local_workload.fetch_certificate().await?;
         let connector = cert.outbound_connector(key.dst_id.clone())?;
-        let tcp_stream = super::freebind_connect(None, key.dst, self.socket_factory.as_ref())
+        let local = match self.socket_factory.is_multi_nic() {
+            Some(true) => {
+                info!("multi-NIC detected, spoofing outbound source addr to {}", key.src);
+                Some(key.src)
+            }
+            Some(false) => {
+                info!("single-NIC detected, not binding to specific source IP");
+                None
+            }
+            None => {
+                info!("multi-NIC detection unavailable, not binding to specific source IP");
+                None
+            }
+        };
+        let tcp_stream = super::freebind_connect(local, key.dst, self.socket_factory.as_ref())
             .await
             .map_err(|e: io::Error| match e.kind() {
                 io::ErrorKind::TimedOut => Error::MaybeHBONENetworkPolicyError(e),

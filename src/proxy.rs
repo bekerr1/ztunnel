@@ -69,6 +69,10 @@ pub trait SocketFactory {
     fn udp_bind(&self, addr: SocketAddr) -> std::io::Result<tokio::net::UdpSocket>;
 
     fn ipv6_enabled_localhost(&self) -> std::io::Result<bool>;
+
+    fn is_multi_nic(&self) -> Option<bool> {
+        None
+    }
 }
 
 #[derive(Clone, Copy, Default)]
